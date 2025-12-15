@@ -114,6 +114,14 @@ class CodeAgentNode(Node):
             updated_paths=updated_paths,
             notes=notes,
         )
+
+        shared["code_status"] = {
+            "stage": "code",
+            "route": "next",
+            "updated_rtl_files": updated_paths,
+            "notes": notes,
+        }
+
         return shared
 
     # ------------------------- Prompting -------------------------

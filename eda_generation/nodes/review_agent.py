@@ -159,6 +159,17 @@ class ReviewAgentNode(Node):
         }
 
         shared["review_feedback"] = feedback
+        
+        route = "syntax_ok" if passed else "syntax_fail"
+
+        shared["review_status"] = {
+            "stage": "review",
+            "route": route,
+            "passed": passed,
+            "error_count": sum(1 for x in issues if str(x.get("severity", "")).lower() in ("fatal", "error")),
+            "warning_count": sum(1 for x in issues if str(x.get("severity", "")).lower() == "warning"),
+        }
+
         return shared
 
     def _build_tcl(

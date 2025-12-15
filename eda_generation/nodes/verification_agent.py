@@ -174,6 +174,18 @@ class VerificationAgentNode(Node):
         }
 
         shared["verify_feedback"] = feedback
+
+        route = "verify_ok" if passed else "verify_fail"
+
+        shared["verify_status"] = {
+            "stage": "verify",
+            "route": route,
+            "passed": passed,
+            "compile_passed": compile_passed,
+            "compile_error_count": len(feedback.get("compile_errors", [])),
+            "failed_case_count": len(feedback.get("failed_cases", [])),
+        }
+
         return shared
 
     # ------------------------- Parsing -------------------------
