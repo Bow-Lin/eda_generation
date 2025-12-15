@@ -1,0 +1,358 @@
+from __future__ import annotations
+
+import re
+import subprocess
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Dict, List, Optional, Tuple
+
+from pocketflow import Node
+
+
+@dataclass
+class VerificationAgentParams:
+    project_root: str = "/home/project/xxproject"
+
+    rtl_flist: str = "rtl.f"     # relative to project_root
+    tb_flist: str = "tb.f"       # relative to project_root
+    tb_top: str = "tb_top"       # testbench top module
+
+    work_subdir: str = "smoketest"        # run iverilog/vvp under <project_root>/<work_subdir>
+    out_dir: str = "build/verify"         # store artifacts under project_root/out_dir
+    sim_exe: str = "simv"
+
+    iverilog_bin: str = "iverilog"
+    vvp_bin: str = "vvp"
+
+    compile_extra_args: Tuple[str, ...] = ("-Wall",)  # add more flags if you want
+
+    context_radius_lines: int = 2
+    max_errors: int = 200
+    max_failed_cases: int = 200
+    raw_tail_lines: int = 200
+
+    # Gate: only run verify when review passed
+    require_review_passed: bool = True
+
+
+class VerificationAgentNode(Node):
+    """
+    Verification Agent (iverilog/vvp):
+      - Compile RTL + TB
+      - Run simulation
+      - Parse failing cases from log
+      - Produce shared["verify_feedback"]
+    """
+
+    def __init__(self, *, params: VerificationAgentParams):
+        super().__init__()
+        self._p = params
+        self._root = Path(params.project_root).resolve()
+
+    def prep(self, shared: Dict[str, Any]) -> Dict[str, Any]:
+        if self._p.require_review_passed:
+            rf = shared.get("review_feedback")
+            if isinstance(rf, dict) and rf.get("passed") is False:
+                # Skip verification if review failed
+                return {"skip": True, "reason": "review_failed"}
+            if rf is None:
+                # No review feedback present: still allow running if caller wants; but default gate requires it
+                return {"skip": True, "reason": "missing_review_feedback"}
+
+        out_dir = (self._root / self._p.out_dir).resolve()
+        out_dir.mkdir(parents=True, exist_ok=True)
+
+        workdir = (self._root / self._p.work_subdir).resolve()
+        workdir.mkdir(parents=True, exist_ok=True)
+
+        rtl_f = (self._root / self._p.rtl_flist).resolve()
+        tb_f = (self._root / self._p.tb_flist).resolve()
+        if not rtl_f.exists():
+            raise FileNotFoundError(f"RTL flist not found: {rtl_f}")
+        if not tb_f.exists():
+            raise FileNotFoundError(f"TB flist not found: {tb_f}")
+
+        simv_path = out_dir / self._p.sim_exe
+        compile_log = out_dir / "sim_compile.log"
+        run_log = out_dir / "sim_run.log"
+
+        return {
+            "skip": False,
+            "workdir": str(workdir),
+            "rtl_flist_abs": str(rtl_f),
+            "tb_flist_abs": str(tb_f),
+            "simv_path": str(simv_path),
+            "compile_log": str(compile_log),
+            "run_log": str(run_log),
+        }
+
+    def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
+        if prep_res.get("skip"):
+            return {"skipped": True, "reason": prep_res.get("reason")}
+
+        # 1) compile
+        compile_cmd = [
+            self._p.iverilog_bin,
+            "-o",
+            prep_res["simv_path"],
+            "-s",
+            self._p.tb_top,
+            "-f",
+            prep_res["rtl_flist_abs"],
+            "-f",
+            prep_res["tb_flist_abs"],
+            *self._p.compile_extra_args,
+        ]
+        compile_out, compile_rc = self._run_cmd(compile_cmd, cwd=prep_res["workdir"])
+        Path(prep_res["compile_log"]).write_text(compile_out, encoding="utf-8", errors="ignore")
+
+        if compile_rc != 0:
+            # No run stage
+            return {
+                "skipped": False,
+                "compile_rc": compile_rc,
+                "compile_out": compile_out,
+                "run_rc": None,
+                "run_out": "",
+            }
+
+        # 2) run
+        run_cmd = [self._p.vvp_bin, prep_res["simv_path"]]
+        run_out, run_rc = self._run_cmd(run_cmd, cwd=prep_res["workdir"])
+        Path(prep_res["run_log"]).write_text(run_out, encoding="utf-8", errors="ignore")
+
+        return {
+            "skipped": False,
+            "compile_rc": compile_rc,
+            "compile_out": compile_out,
+            "run_rc": run_rc,
+            "run_out": run_out,
+        }
+
+    def post(self, shared: Dict[str, Any], prep_res: Dict[str, Any], exec_res: Dict[str, Any]) -> Dict[str, Any]:
+        if exec_res.get("skipped"):
+            shared["verify_feedback"] = {
+                "phase": "verify",
+                "tool": "iverilog",
+                "passed": False,
+                "skipped": True,
+                "reason": exec_res.get("reason"),
+                "compile_passed": False,
+                "compile_errors": [],
+                "failed_cases": [],
+                "artifacts": {},
+                "raw_log_tail": [],
+            }
+            return shared
+
+        compile_out = exec_res.get("compile_out", "")
+        run_out = exec_res.get("run_out", "")
+
+        compile_errors = self._parse_compile_errors(compile_out)
+        compile_passed = (exec_res.get("compile_rc", 1) == 0) and (len(compile_errors) == 0)
+
+        failed_cases = []
+        if compile_passed:
+            failed_cases = self._parse_failed_cases(run_out)
+
+        passed = compile_passed and (exec_res.get("run_rc", 1) == 0) and (len(failed_cases) == 0)
+
+        feedback = {
+            "phase": "verify",
+            "tool": "iverilog",
+            "passed": passed,
+            "skipped": False,
+            "compile_passed": compile_passed,
+            "compile_errors": compile_errors[: self._p.max_errors],
+            "failed_cases": failed_cases[: self._p.max_failed_cases],
+            "artifacts": {
+                "simv": prep_res.get("simv_path"),
+                "compile_log": prep_res.get("compile_log"),
+                "run_log": prep_res.get("run_log"),
+            },
+            "raw_log_tail": (run_out.splitlines()[-self._p.raw_tail_lines :] if run_out else compile_out.splitlines()[-self._p.raw_tail_lines :]),
+        }
+
+        shared["verify_feedback"] = feedback
+        return shared
+
+    # ------------------------- Parsing -------------------------
+
+    def _parse_compile_errors(self, compile_out: str) -> List[Dict[str, Any]]:
+        """
+        Typical iverilog errors:
+          path/to/file.v:123: error: <message>
+          path/to/file.v:45: syntax error
+        """
+        errs: List[Dict[str, Any]] = []
+        for line in compile_out.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+
+            # file:line: error: msg
+            m = re.match(r"^(?P<file>.*?):(?P<line>\d+):\s*(?P<kind>error|ERROR)\s*:\s*(?P<msg>.*)$", s)
+            if m:
+                f = m.group("file")
+                ln = int(m.group("line"))
+                msg = m.group("msg")
+                errs.append(
+                    {
+                        "severity": "Error",
+                        "file": f,
+                        "line": ln,
+                        "message": msg,
+                        "context": self._read_context(f, ln, self._p.context_radius_lines),
+                    }
+                )
+                continue
+
+            # file:line: syntax error
+            m2 = re.match(r"^(?P<file>.*?):(?P<line>\d+):\s*(?P<msg>syntax error.*)$", s, flags=re.IGNORECASE)
+            if m2:
+                f = m2.group("file")
+                ln = int(m2.group("line"))
+                msg = m2.group("msg")
+                errs.append(
+                    {
+                        "severity": "Error",
+                        "file": f,
+                        "line": ln,
+                        "message": msg,
+                        "context": self._read_context(f, ln, self._p.context_radius_lines),
+                    }
+                )
+                continue
+
+            # keep other lines that look severe
+            if "error" in s.lower():
+                errs.append({"severity": "Error", "file": "", "line": None, "message": s, "context": []})
+
+        return errs
+
+    def _parse_failed_cases(self, run_out: str) -> List[Dict[str, Any]]:
+        """
+        Compatible patterns:
+          - "CASE <name> FAIL: ..."
+          - "CASE <name> PASS"
+          - "ASSERT FAIL: ..."
+          - generic: "FAIL:" / "ERROR:" lines
+        """
+        failed: List[Dict[str, Any]] = []
+
+        # CASE xxx FAIL:
+        case_fail = re.compile(r"CASE\s+(?P<name>\S+)\s+FAIL\s*:\s*(?P<msg>.*)$", re.IGNORECASE)
+        # ASSERT FAIL:
+        assert_fail = re.compile(r"ASSERT\s+FAIL\s*:\s*(?P<msg>.*)$", re.IGNORECASE)
+
+        for line in run_out.splitlines():
+            s = line.strip()
+            if not s:
+                continue
+
+            m = case_fail.search(s)
+            if m:
+                failed.append(
+                    {
+                        "case": m.group("name"),
+                        "message": m.group("msg"),
+                        "signals": self._extract_signals(s),
+                        "expected_behavior": self._extract_expected_behavior(s),
+                        "raw": s,
+                    }
+                )
+                continue
+
+            m2 = assert_fail.search(s)
+            if m2:
+                failed.append(
+                    {
+                        "case": None,
+                        "message": m2.group("msg"),
+                        "signals": self._extract_signals(s),
+                        "expected_behavior": self._extract_expected_behavior(s),
+                        "raw": s,
+                    }
+                )
+                continue
+
+            # fallback: lines that smell like failure
+            if any(k in s.lower() for k in (" fail", "fail:", "error:", "mismatch", "expected", "got=")):
+                failed.append(
+                    {
+                        "case": None,
+                        "message": s,
+                        "signals": self._extract_signals(s),
+                        "expected_behavior": self._extract_expected_behavior(s),
+                        "raw": s,
+                    }
+                )
+
+        # de-dup exact raw lines
+        uniq = []
+        seen = set()
+        for it in failed:
+            key = it.get("raw", it.get("message", ""))
+            if key in seen:
+                continue
+            seen.add(key)
+            uniq.append(it)
+        return uniq
+
+    def _extract_signals(self, text: str) -> List[str]:
+        # Heuristic: capture identifiers near known markers
+        # Examples: "shift_ena should be 0" => shift_ena
+        sigs = set()
+
+        for m in re.finditer(r"\b([a-zA-Z_]\w*)\b", text):
+            tok = m.group(1)
+            # skip common words
+            if tok.lower() in {"case", "fail", "pass", "assert", "exp", "got", "should", "be", "after", "cycles", "at", "t"}:
+                continue
+            # filter overly short tokens
+            if len(tok) <= 1:
+                continue
+            sigs.add(tok)
+
+        # keep order-ish by appearance
+        ordered: List[str] = []
+        for m in re.finditer(r"\b([a-zA-Z_]\w*)\b", text):
+            tok = m.group(1)
+            if tok in sigs and tok not in ordered:
+                ordered.append(tok)
+
+        return ordered[:8]
+
+    def _extract_expected_behavior(self, text: str) -> Optional[str]:
+        # Heuristic: if line contains "should ..." or "expected ..."
+        m = re.search(r"(should\s+.*)$", text, flags=re.IGNORECASE)
+        if m:
+            return m.group(1).strip()
+        m2 = re.search(r"(expected\s+.*)$", text, flags=re.IGNORECASE)
+        if m2:
+            return m2.group(1).strip()
+        return None
+
+    # ------------------------- File context -------------------------
+
+    def _read_context(self, file_path: str, line: int, radius: int) -> List[str]:
+        p = Path(file_path)
+        if not p.is_absolute():
+            p = (self._root / p).resolve()
+        if not p.exists():
+            return []
+
+        lines = p.read_text(encoding="utf-8", errors="ignore").splitlines()
+        idx = max(1, line) - 1
+        lo = max(0, idx - radius)
+        hi = min(len(lines), idx + radius + 1)
+        out = []
+        for i in range(lo, hi):
+            out.append(f"{i+1}: {lines[i]}")
+        return out
+
+    # ------------------------- Command runner -------------------------
+
+    def _run_cmd(self, cmd: List[str], *, cwd: Optional[str] = None) -> tuple[str, int]:
+        p = subprocess.run(cmd, cwd=cwd, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        return p.stdout, p.returncode
