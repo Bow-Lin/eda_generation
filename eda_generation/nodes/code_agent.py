@@ -7,10 +7,7 @@ from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
 from pocketflow import Node
-
-
-class LLMClient(Protocol):
-    def generate(self, prompt: str, *, temperature: float = 0.2) -> str: ...
+from utils.clients.iflow_client import IFlowClient
 
 
 @dataclass
@@ -45,9 +42,9 @@ class CodeAgentNode(Node):
       - last_edit_summary: str
     """
 
-    def __init__(self, *, llm_client: LLMClient, params: CodeAgentParams):
+    def __init__(self, *, llm_client: Optional[IFlowClient] = None, params: CodeAgentParams):
         super().__init__()
-        self._llm = llm_client
+        self._llm = llm_client or IFlowClient()
         self._p = params
         self._root = Path(params.project_root).resolve()
 
@@ -83,7 +80,7 @@ class CodeAgentNode(Node):
         }
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
-        raw = self._llm.generate(prep_res["prompt"], temperature=self._p.temperature)
+        raw = self._llm.chat_completion(prep_res["prompt"], temperature=self._p.temperature, stream=False)
         return {"raw": raw}
 
     def post(self, shared: Dict[str, Any], prep_res: Dict[str, Any], exec_res: Dict[str, Any]) -> Dict[str, Any]:
