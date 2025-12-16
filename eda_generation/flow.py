@@ -17,7 +17,7 @@ class FlowParams:
     top_rtl: str = "top"
     tb_flist: str = "tb.f"
     tb_top: str = "tb_top"
-    max_rounds: int = 20
+    max_rounds: int = 3
 
 
 def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
