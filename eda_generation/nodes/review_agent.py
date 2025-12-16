@@ -31,6 +31,8 @@ class ReviewAgentParams:
     context_radius_lines: int = 2
     max_issues: int = 200
     raw_tail_lines: int = 120
+    max_fail_attempts: int = 3
+    max_rounds: int = 3
 
 
 class ReviewAgentNode(Node):
@@ -159,8 +161,31 @@ class ReviewAgentNode(Node):
         }
 
         shared["review_feedback"] = feedback
-        
+        flow_status = shared.setdefault("flow_status", {})
+
+        attempts = int(flow_status.get("review_attempts", 0))
+        if passed:
+            attempts = 0
+        else:
+            attempts += 1
+
         route = "syntax_ok" if passed else "syntax_fail"
+        reason = "syntax_ok"
+
+        if not passed and attempts >= self._p.max_fail_attempts:
+            route = "abort"
+            reason = "review_fail_limit_reached"
+        elif not passed:
+            reason = "syntax_fail"
+
+        round_cnt = int(flow_status.get("round", 0))
+        if self._p.max_rounds and round_cnt > self._p.max_rounds:
+            route = "abort"
+            reason = "max_rounds_reached"
+
+        flow_status["review_attempts"] = attempts
+        flow_status["last_reason"] = reason
+        flow_status["last_stage"] = "review"
 
         shared["review_status"] = {
             "stage": "review",
@@ -168,9 +193,11 @@ class ReviewAgentNode(Node):
             "passed": passed,
             "error_count": sum(1 for x in issues if str(x.get("severity", "")).lower() in ("fatal", "error")),
             "warning_count": sum(1 for x in issues if str(x.get("severity", "")).lower() == "warning"),
+            "attempts": attempts,
+            "reason": reason,
         }
 
-        return shared
+        return route
 
     def _build_tcl(
         self,

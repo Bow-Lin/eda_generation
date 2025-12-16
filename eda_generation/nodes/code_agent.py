@@ -51,6 +51,10 @@ class CodeAgentNode(Node):
     # ------------------------- PocketFlow hooks -------------------------
 
     def prep(self, shared: Dict[str, Any]) -> Dict[str, Any]:
+        flow_status = shared.setdefault("flow_status", {})
+        flow_status["round"] = int(flow_status.get("round", 0)) + 1
+        flow_status["last_stage"] = "code"
+
         spec = (shared.get("spec") or shared.get("user_query") or "").strip()
         if not spec:
             raise ValueError("shared['spec'] (or shared['user_query']) is required for CodeAgentNode.")
@@ -119,7 +123,7 @@ class CodeAgentNode(Node):
             "notes": notes,
         }
 
-        return shared
+        return "next"
 
     # ------------------------- Prompting -------------------------
 

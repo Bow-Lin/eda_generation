@@ -33,6 +33,8 @@ class VerificationAgentParams:
 
     # Gate: only run verify when review passed
     require_review_passed: bool = True
+    max_fail_attempts: int = 3
+    max_rounds: int = 3
 
 
 class VerificationAgentNode(Node):
@@ -143,7 +145,19 @@ class VerificationAgentNode(Node):
                 "artifacts": {},
                 "raw_log_tail": [],
             }
-            return shared
+            shared.setdefault("flow_status", {})["last_stage"] = "verify"
+            shared.setdefault("verify_status", {})
+            shared["verify_status"] = {
+                "stage": "verify",
+                "route": "verify_fail",
+                "passed": False,
+                "compile_passed": False,
+                "compile_error_count": 0,
+                "failed_case_count": 0,
+                "attempts": int(shared.get("flow_status", {}).get("verify_attempts", 0)),
+                "reason": exec_res.get("reason") or "skipped",
+            }
+            return "verify_fail"
 
         compile_out = exec_res.get("compile_out", "")
         run_out = exec_res.get("run_out", "")
@@ -175,7 +189,31 @@ class VerificationAgentNode(Node):
 
         shared["verify_feedback"] = feedback
 
+        flow_status = shared.setdefault("flow_status", {})
+
+        attempts = int(flow_status.get("verify_attempts", 0))
+        if passed:
+            attempts = 0
+        else:
+            attempts += 1
+
         route = "verify_ok" if passed else "verify_fail"
+        reason = "verify_ok"
+
+        if not passed and attempts >= self._p.max_fail_attempts:
+            route = "abort"
+            reason = "verify_fail_limit_reached"
+        elif not passed:
+            reason = "verify_fail"
+
+        round_cnt = int(flow_status.get("round", 0))
+        if self._p.max_rounds and round_cnt > self._p.max_rounds:
+            route = "abort"
+            reason = "max_rounds_reached"
+
+        flow_status["verify_attempts"] = attempts
+        flow_status["last_reason"] = reason
+        flow_status["last_stage"] = "verify"
 
         shared["verify_status"] = {
             "stage": "verify",
@@ -184,9 +222,11 @@ class VerificationAgentNode(Node):
             "compile_passed": compile_passed,
             "compile_error_count": len(feedback.get("compile_errors", [])),
             "failed_case_count": len(feedback.get("failed_cases", [])),
+            "attempts": attempts,
+            "reason": reason,
         }
 
-        return shared
+        return route
 
     # ------------------------- Parsing -------------------------
 
