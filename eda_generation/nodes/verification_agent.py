@@ -289,8 +289,25 @@ class VerificationAgentNode(Node):
           - "CASE <name> PASS"
           - "ASSERT FAIL: ..."
           - generic: "FAIL:" / "ERROR:" lines
+          - Standardized summary lines like "Mismatches: X in Y samples"
         """
         failed: List[Dict[str, Any]] = []
+
+        # If we have a standardized mismatch summary, use it directly.
+        mm_cnt = self._extract_mismatch_count(run_out)
+        if mm_cnt is not None:
+            if mm_cnt == 0:
+                return []
+            failed.append(
+                {
+                    "case": "mismatch_total",
+                    "message": f"Mismatches reported: {mm_cnt}",
+                    "signals": [],
+                    "expected_behavior": None,
+                    "raw": f"mismatch_total={mm_cnt}",
+                }
+            )
+            return failed
 
         # CASE xxx FAIL:
         case_fail = re.compile(r"CASE\s+(?P<name>\S+)\s+FAIL\s*:\s*(?P<msg>.*)$", re.IGNORECASE)
@@ -300,6 +317,10 @@ class VerificationAgentNode(Node):
         for line in run_out.splitlines():
             s = line.strip()
             if not s:
+                continue
+
+            # Ignore lines that explicitly indicate zero mismatches.
+            if "no mismatches" in s.lower() or re.search(r"mismatch(es)?\s*:\s*0", s, re.IGNORECASE):
                 continue
 
             m = case_fail.search(s)
@@ -350,6 +371,26 @@ class VerificationAgentNode(Node):
             seen.add(key)
             uniq.append(it)
         return uniq
+
+    def _extract_mismatch_count(self, run_out: str) -> Optional[int]:
+        """
+        Parse standardized mismatch summary lines. Examples:
+          "Mismatches: 0 in 20 samples"
+          "Hint: Total mismatched samples is 0 out of 20 samples"
+        Returns an int when found, otherwise None.
+        """
+        pats = [
+            re.compile(r"Mismatches?\s*:\s*(\d+)", re.IGNORECASE),
+            re.compile(r"Total\s+mismatched\s+samples\s+is\s+(\d+)", re.IGNORECASE),
+        ]
+        for pat in pats:
+            m = pat.search(run_out)
+            if m:
+                try:
+                    return int(m.group(1))
+                except Exception:
+                    continue
+        return None
 
     def _extract_signals(self, text: str) -> List[str]:
         # Heuristic: capture identifiers near known markers
