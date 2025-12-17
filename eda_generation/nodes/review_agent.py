@@ -206,21 +206,88 @@ class ReviewAgentNode(Node):
         top_rtl: str,
         goal: str,
         errors_abs: str,
-        warnings_abs: str,
+        warnings_abs: str,  # unused (kept for signature compatibility)
     ) -> str:
+        # We only care about Error/Fatal. Parse SpyGlass moresimple.rpt blocks.
+        all_rpt_abs = f"{errors_abs}.moresimple.rpt"
+
         return "\n".join(
             [
                 "new_project review_proj -force",
-                f'read_file -type verilog -f "{rtl_flist_abs}"',
+                f'set fp [open "{rtl_flist_abs}" r]',
+                "set flist_raw [read $fp]",
+                "close $fp",
+                "set files {}",
+                'foreach line [split $flist_raw "\\n"] {',
+                "    set s [string trim $line]",
+                '    if {$s eq ""} { continue }',
+                '    if {[string first "#" $s] == 0} { continue }',
+                "    lappend files $s",
+                "}",
+                "read_file -type verilog $files",
                 f'set_option top "{top_rtl}"',
                 f"current_goal {goal}",
                 "run_goal",
-                f'report_messages -severity {{Error Fatal}} -format text -output "{errors_abs}"',
-                f'report_messages -severity {{Warning}}     -format text -output "{warnings_abs}"',
+
+                # Locate moresimple report in consolidated_reports
+                f'set __TOP "{top_rtl}"',
+                'set __GOAL [string map {"/" "_"} "' + goal + '"]',
+                'set __RPT_DIR [file normalize [format "./review_proj/consolidated_reports/%s_%s" $__TOP $__GOAL]]',
+                'set __RPT [file join $__RPT_DIR "moresimple.rpt"]',
+
+                f'set __ERR "{errors_abs}"',
+                f'set __COPY "{all_rpt_abs}"',
+
+                # Hard fail if report missing
+                'if {![file exists $__RPT]} { error [format "Expected report not found: %s" $__RPT] }',
+
+                # Optional: keep a copy of the report next to error output for debugging
+                'file copy -force $__RPT $__COPY',
+
+                # Write only Error/Fatal message blocks to $__ERR
+                "proc __flush_err_block {block sev err_f} {",
+                "    set s [string tolower $sev]",
+                '    if {$s eq "error" || $s eq "fatal"} {',
+                "        puts $err_f $block",
+                "    }",
+                "}",
+
+                "proc __extract_errors_from_moresimple {src err_dst} {",
+                "    set in [open $src r]",
+                "    set err_f [open $err_dst w]",
+                "    set cur \"\"",
+                "    set cur_sev \"\"",
+                "    while {[gets $in line] >= 0} {",
+                "        # Each message record starts with [ID] (e.g., [D], [7], [0])",
+                "        if {[regexp {^\\[[^]]+\\]} $line]} {",
+                "            if {$cur ne \"\"} { __flush_err_block $cur $cur_sev $err_f }",
+                "            set cur $line",
+                "            append cur \"\\n\"",
+                "            # Severity is on the first line; file path may be wrapped later",
+                "            if {[regexp {\\s(Fatal|Error|Warning|Info)\\s+\\S+} $line -> sev]} {",
+                "                set cur_sev $sev",
+                "            } else {",
+                "                set cur_sev \"\"",
+                "            }",
+                "        } else {",
+                "            if {$cur ne \"\"} {",
+                "                append cur $line",
+                "                append cur \"\\n\"",
+                "            }",
+                "        }",
+                "    }",
+                "    if {$cur ne \"\"} { __flush_err_block $cur $cur_sev $err_f }",
+                "    close $in",
+                "    close $err_f",
+                "}",
+
+                "__extract_errors_from_moresimple $__RPT $__ERR",
+
                 "exit -force",
                 "",
             ]
         )
+
 
     def _parse_report(self, text: str) -> List[Dict[str, Any]]:
         if not text.strip():

@@ -31,14 +31,14 @@ class IFlowClient:
         Initialize iFlow Client.
 
         Args:
-            api_key: iFlow API key, if not provided will get from environment variable IFLLOW_API_KEY
+            api_key: iFlow API key, if not provided will get from environment variable IFLOW_API_KEY
             base_url: API base URL, default is iFlow API address
         """
         self.api_key = api_key or os.getenv("IFLOW_API_KEY")
         if not self.api_key:
             raise ValueError(
                 "iFlow API key not provided, please set api_key parameter "
-                "or IFLLOW_API_KEY environment variable"
+                "or IFLOW_API_KEY environment variable"
             )
 
         self.base_url = base_url
@@ -71,9 +71,18 @@ class IFlowClient:
 
     # ---------- sync API ----------
 
+    @staticmethod
+    def _normalize_messages(messages: Union[str, List[Dict[str, str]]]) -> List[Dict[str, str]]:
+        """
+        Accept either a prompt string or a messages list; always return a list.
+        """
+        if isinstance(messages, str):
+            return [{"role": "user", "content": messages}]
+        return messages
+
     def chat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: Union[str, List[Dict[str, str]]],
         model: str = "qwen3-max",  # Default to use qwen3-max model
         temperature: float = 0.7,
         max_tokens: Optional[int] = 1000,
@@ -84,7 +93,7 @@ class IFlowClient:
         Get chat completion.
 
         Args:
-            messages: Message list, format is
+            messages: Either a prompt string or a message list, format is
                 [{"role": "user", "content": "message content"}, ...]
             model: Model name to use
             temperature: Temperature parameter, controls output randomness
@@ -96,6 +105,8 @@ class IFlowClient:
             - If stream=False: returns full text string.
             - If stream=True: returns an iterator of text chunks (str).
         """
+        messages = self._normalize_messages(messages)
+
         if not stream:
             # Non-streaming: normal one-shot completion
             response = self.sync_client.chat.completions.create(
@@ -133,7 +144,7 @@ class IFlowClient:
 
     async def achat_completion(
         self,
-        messages: List[Dict[str, str]],
+        messages: Union[str, List[Dict[str, str]]],
         model: str = "qwen3-max",
         temperature: float = 0.7,
         max_tokens: Optional[int] = 1000,
@@ -155,6 +166,8 @@ class IFlowClient:
             - If stream=False: returns full text string.
             - If stream=True: returns an async iterator of text chunks (str).
         """
+        messages = self._normalize_messages(messages)
+
         if not stream:
             # Non-streaming async call
             response = await self.async_client.chat.completions.create(
