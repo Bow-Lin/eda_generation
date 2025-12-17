@@ -134,21 +134,23 @@ class CodeAgentNode(Node):
             debug_dir = (self._root / "build").resolve()
             debug_dir.mkdir(parents=True, exist_ok=True)
             debug_path = debug_dir / "debug.log"
-            debug_path.write_text(
-                json.dumps(
-                    {
-                        "stage": "code",
-                        "round": round_no,
-                        "spec": spec,
-                        "updated_files": updated_paths,
-                        "notes": notes,
-                        "last_edit_summary": shared.get("last_edit_summary"),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            debug_path.parent.mkdir(parents=True, exist_ok=True)
+            with debug_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "stage": "code",
+                            "round": round_no,
+                            "spec": spec,
+                            "updated_files": updated_paths,
+                            "notes": notes,
+                            "last_edit_summary": shared.get("last_edit_summary"),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                f.write("\n")
         except Exception:
             pass
 

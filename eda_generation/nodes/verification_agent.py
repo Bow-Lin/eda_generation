@@ -246,24 +246,25 @@ class VerificationAgentNode(Node):
             debug_dir = (self._root / self._p.out_dir).resolve()
             debug_dir.mkdir(parents=True, exist_ok=True)
             debug_path = debug_dir / "debug.log"
-            debug_path.write_text(
-                json.dumps(
-                    {
-                        "stage": "verify",
-                        "round": shared.get("flow_status", {}).get("round"),
-                        "spec": spec,
-                        "passed": passed,
-                        "route": route,
-                        "compile_passed": compile_passed,
-                        "compile_errors": feedback.get("compile_errors", []),
-                        "failed_cases": feedback.get("failed_cases", []),
-                        "artifacts": feedback.get("artifacts"),
-                    },
-                    ensure_ascii=False,
-                    indent=2,
-                ),
-                encoding="utf-8",
-            )
+            with debug_path.open("a", encoding="utf-8") as f:
+                f.write(
+                    json.dumps(
+                        {
+                            "stage": "verify",
+                            "round": shared.get("flow_status", {}).get("round"),
+                            "spec": spec,
+                            "passed": passed,
+                            "route": route,
+                            "compile_passed": compile_passed,
+                            "compile_errors": feedback.get("compile_errors", []),
+                            "failed_cases": feedback.get("failed_cases", []),
+                            "artifacts": feedback.get("artifacts"),
+                        },
+                        ensure_ascii=False,
+                        indent=2,
+                    )
+                )
+                f.write("\n")
         except Exception:
             pass
 
