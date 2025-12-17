@@ -199,6 +199,38 @@ class ReviewAgentNode(Node):
             "reason": reason,
         }
 
+        # Concise print
+        spec = (shared.get("spec") or "").strip().replace("\n", " ")
+        spec_short = (spec[:80] + "...") if len(spec) > 80 else spec
+        print(
+            f"[review] round={shared.get('flow_status', {}).get('round')} spec=\"{spec_short}\" "
+            f"passed={passed} issues={len(issues)} route={route}"
+        )
+
+        # Persist debug info
+        try:
+            debug_dir = (self._root / self._p.out_dir).resolve()
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / "debug.log"
+            debug_path.write_text(
+                json.dumps(
+                    {
+                        "stage": "review",
+                        "round": shared.get("flow_status", {}).get("round"),
+                        "spec": spec,
+                        "passed": passed,
+                        "route": route,
+                        "issues": issues[: self._p.max_issues],
+                        "artifacts": feedback.get("artifacts"),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
         return route
 
     def _build_tcl(

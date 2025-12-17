@@ -119,6 +119,39 @@ class CodeAgentNode(Node):
             notes=notes,
         )
 
+        # Log concise summary with round/spec context.
+        flow_status = shared.get("flow_status", {})
+        round_no = flow_status.get("round")
+        spec = (shared.get("spec") or "").strip().replace("\n", " ")
+        spec_short = (spec[:80] + "...") if len(spec) > 80 else spec
+        print(
+            f"[code] round={round_no} spec=\"{spec_short}\" files={len(updated_paths)} "
+            f"has_feedback={prep_res['has_feedback']}"
+        )
+
+        # Persist debug info to build/debug.log
+        try:
+            debug_dir = (self._root / "build").resolve()
+            debug_dir.mkdir(parents=True, exist_ok=True)
+            debug_path = debug_dir / "debug.log"
+            debug_path.write_text(
+                json.dumps(
+                    {
+                        "stage": "code",
+                        "round": round_no,
+                        "spec": spec,
+                        "updated_files": updated_paths,
+                        "notes": notes,
+                        "last_edit_summary": shared.get("last_edit_summary"),
+                    },
+                    ensure_ascii=False,
+                    indent=2,
+                ),
+                encoding="utf-8",
+            )
+        except Exception:
+            pass
+
         shared["code_status"] = {
             "stage": "code",
             "route": "next",
