@@ -60,7 +60,7 @@ def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
     finish = FinishNode()
 
     # Edges
-    code_agent >> review_agent
+    code_agent - "next" >> review_agent
 
     review_agent - "syntax_ok" >> verify_agent
     review_agent - "syntax_fail" >> code_agent

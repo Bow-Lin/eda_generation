@@ -9,7 +9,8 @@ class FinishNode(Node):
     """Terminal node to mark flow completion and allow cleanup/summary."""
 
     def prep(self, shared):
-        pass
+        # ensure shared is a dict to avoid NoneType errors when flow ends unexpectedly
+        return shared or {}
 
     def exec(self, shared: Dict[str, Any]) -> str:
         shared.setdefault("flow_status", {})
