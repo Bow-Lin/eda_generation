@@ -14,6 +14,8 @@ from nodes.finish_node import FinishNode
 class FlowParams:
     project_root: str = "/home/project/xxproject"
     rtl_flist: str = "rtl.f"
+    review_rtl_flist: Optional[str] = None   # review可用更精简flist（仅DUT）
+    verify_rtl_flist: Optional[str] = None   # verify可用含RefModule的flist
     top_rtl: str = "top"
     tb_flist: str = "tb.f"
     tb_top: str = "tb_top"
@@ -40,8 +42,8 @@ def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
         params=ReviewAgentParams(
             project_root=p.project_root,
             container_name="spyglass-centos7",
-            work_subdir="smoketest",
-            rtl_flist=p.rtl_flist,
+            work_subdir=".",  # 与容器挂载路径一致
+            rtl_flist=p.review_rtl_flist or p.rtl_flist,
             top_rtl=p.top_rtl,
         )
     )
@@ -49,10 +51,10 @@ def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
     verify_agent = VerificationAgentNode(
         params=VerificationAgentParams(
             project_root=p.project_root,
-            rtl_flist=p.rtl_flist,
+            rtl_flist=p.verify_rtl_flist or p.rtl_flist,
             tb_flist=p.tb_flist,
             tb_top=p.tb_top,
-            work_subdir="smoketest",
+            work_subdir=".",  # 与容器挂载路径一致
             require_review_passed=False,
         )
     )

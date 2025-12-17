@@ -84,7 +84,9 @@ class CodeAgentNode(Node):
         }
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
+        print(f"[code] invoking LLM (temp={self._p.temperature}) ...")
         raw = self._llm_client.chat_completion(prep_res["prompt"], temperature=self._p.temperature, stream=False)
+        print(f"[code] LLM completed, raw length={len(raw)}")
         return {"raw": raw}
 
     def post(self, shared: Dict[str, Any], prep_res: Dict[str, Any], exec_res: Dict[str, Any]) -> Dict[str, Any]:
@@ -104,6 +106,7 @@ class CodeAgentNode(Node):
             self._validate_target_path(rel)
             if self._p.forbid_tb_edit and self._looks_like_tb(rel):
                 raise ValueError(f"TB edits are forbidden by params, but LLM attempted to edit: {rel}")
+            print(f"[code] writing file: {rel} (len={len(content)})")
             self._write_text(rel, content)
             updated_paths.append(rel)
 

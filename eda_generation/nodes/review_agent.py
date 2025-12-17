@@ -16,7 +16,7 @@ class ReviewAgentParams:
     container_name: str = "spyglass-centos7"
     docker_bin: str = "docker"
 
-    work_subdir: str = "smoketest"          # run SpyGlass under <project_root>/<work_subdir>
+    work_subdir: str = "."          # run SpyGlass under <project_root>/<work_subdir>
     rtl_flist: str = "rtl.f"                # relative to project_root (or absolute)
     top_rtl: str = "top"
 
@@ -84,6 +84,7 @@ class ReviewAgentNode(Node):
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
         Path(prep_res["tcl_path"]).write_text(prep_res["tcl_text"], encoding="utf-8")
 
+        print(f"[review] starting docker start + spyglass (tcl={prep_res['tcl_path']})...")
         start_out, start_rc = self._run_cmd([self._p.docker_bin, "start", self._p.container_name])
 
         # Because host path == container path under /home/project mount, we can pass absolute tcl path directly.
@@ -101,6 +102,7 @@ class ReviewAgentNode(Node):
             f"spyglass -shell -tcl {tcl_abs}",
         ]
         out, rc = self._run_cmd(cmd)
+        print(f"[review] spyglass finished rc={rc}")
 
         raw = []
         raw.append("=== docker start ===")

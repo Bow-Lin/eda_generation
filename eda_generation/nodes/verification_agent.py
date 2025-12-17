@@ -24,7 +24,8 @@ class VerificationAgentParams:
     iverilog_bin: str = "iverilog"
     vvp_bin: str = "vvp"
 
-    compile_extra_args: Tuple[str, ...] = ("-Wall",)  # add more flags if you want
+    # Include SystemVerilog by default because most TBs use SV syntax.
+    compile_extra_args: Tuple[str, ...] = ("-g2012", "-Wall")
 
     context_radius_lines: int = 2
     max_errors: int = 200
@@ -93,6 +94,7 @@ class VerificationAgentNode(Node):
             return {"skipped": True, "reason": prep_res.get("reason")}
 
         # 1) compile
+        print(f"[verify] compiling with iverilog (tb_top={self._p.tb_top}) ...")
         compile_cmd = [
             self._p.iverilog_bin,
             "-o",
@@ -107,6 +109,7 @@ class VerificationAgentNode(Node):
         ]
         compile_out, compile_rc = self._run_cmd(compile_cmd, cwd=prep_res["workdir"])
         Path(prep_res["compile_log"]).write_text(compile_out, encoding="utf-8", errors="ignore")
+        print(f"[verify] compile done rc={compile_rc}")
 
         if compile_rc != 0:
             # No run stage
@@ -119,9 +122,11 @@ class VerificationAgentNode(Node):
             }
 
         # 2) run
+        print("[verify] running vvp ...")
         run_cmd = [self._p.vvp_bin, prep_res["simv_path"]]
         run_out, run_rc = self._run_cmd(run_cmd, cwd=prep_res["workdir"])
         Path(prep_res["run_log"]).write_text(run_out, encoding="utf-8", errors="ignore")
+        print(f"[verify] run done rc={run_rc}")
 
         return {
             "skipped": False,
