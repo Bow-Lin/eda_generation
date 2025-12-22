@@ -85,7 +85,7 @@ class IFlowClient:
         messages: Union[str, List[Dict[str, str]]],
         model: str = "qwen3-max",  # Default to use qwen3-max model
         temperature: float = 0.7,
-        max_tokens: Optional[int] = 1000,
+        max_tokens: Optional[int] = 16384,
         stream: bool = False,
         **kwargs: Any,
     ) -> Union[str, Iterator[str]]:
