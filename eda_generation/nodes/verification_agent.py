@@ -79,6 +79,8 @@ class VerificationAgentNode(Node):
         simv_path = out_dir / self._p.sim_exe
         compile_log = out_dir / "sim_compile.log"
         run_log = out_dir / "sim_run.log"
+        compile_error_log = out_dir / "compile_error.log"
+        mismatch_case_log = out_dir / "mismatch_case.log"
 
         return {
             "skip": False,
@@ -88,6 +90,8 @@ class VerificationAgentNode(Node):
             "simv_path": str(simv_path),
             "compile_log": str(compile_log),
             "run_log": str(run_log),
+            "compile_error_log": str(compile_error_log),
+            "mismatch_case_log": str(mismatch_case_log),
         }
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
@@ -189,6 +193,8 @@ class VerificationAgentNode(Node):
                 "simv": prep_res.get("simv_path"),
                 "compile_log": prep_res.get("compile_log"),
                 "run_log": prep_res.get("run_log"),
+                "compile_error_log": prep_res.get("compile_error_log"),
+                "mismatch_case_log": prep_res.get("mismatch_case_log"),
             },
             "raw_log_tail": (run_out.splitlines()[-self._p.raw_tail_lines :] if run_out else compile_out.splitlines()[-self._p.raw_tail_lines :]),
         }
@@ -266,6 +272,32 @@ class VerificationAgentNode(Node):
                     )
                 )
                 f.write("\n")
+        except Exception:
+            pass
+
+        # Persist concise error summaries for quick inspection.
+        try:
+            if (not compile_passed) and prep_res.get("compile_error_log"):
+                err_lines: List[str] = []
+                if compile_errors:
+                    for e in compile_errors[: self._p.max_errors]:
+                        loc = f"{e.get('file')}:{e.get('line')}" if e.get("file") else ""
+                        msg = e.get("message") or ""
+                        err_lines.append(f"{loc} {msg}".strip())
+                else:
+                    err_lines = compile_out.splitlines()
+                Path(prep_res["compile_error_log"]).write_text("\n".join(err_lines), encoding="utf-8")
+
+            if failed_cases and prep_res.get("mismatch_case_log"):
+                mm_lines: List[str] = []
+                for c in failed_cases[: self._p.max_failed_cases]:
+                    name = c.get("case") or "<unknown>"
+                    msg = c.get("message") or c.get("raw") or ""
+                    mm_lines.append(f"{name}: {msg}")
+                # If nothing was parsed but run_out had content, fall back to run_out.
+                if not mm_lines and run_out:
+                    mm_lines = run_out.splitlines()
+                Path(prep_res["mismatch_case_log"]).write_text("\n".join(mm_lines), encoding="utf-8")
         except Exception:
             pass
 
