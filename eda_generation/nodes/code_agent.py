@@ -2,7 +2,7 @@ from __future__ import annotations
 
 import json
 import re
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any, Dict, List, Optional, Protocol, Tuple
 
@@ -21,6 +21,10 @@ class CodeAgentParams:
     output_mode: str = "json_files"  # reserved for future: "unidiff"
     forbid_tb_edit: bool = True
     strict_json_only: bool = True
+    # When using Qwen structured output, set response_format to enforce JSON (see
+    # https://help.aliyun.com/zh/model-studio/qwen-structured-output). Use a
+    # factory to avoid sharing mutable defaults.
+    response_format: Optional[Dict[str, Any]] = field(default_factory=lambda: {"type": "json_object"})
 
 
 class CodeAgentNode(Node):
@@ -85,7 +89,28 @@ class CodeAgentNode(Node):
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[code] invoking LLM (temp={self._p.temperature}) ...")
-        raw = self._llm_client.chat_completion(prep_res["prompt"], temperature=self._p.temperature, stream=False)
+        llm_kwargs: Dict[str, Any] = {}
+        if self._p.response_format:
+            llm_kwargs["response_format"] = self._p.response_format
+
+        try:
+            raw = self._llm_client.chat_completion(
+                prep_res["prompt"],
+                temperature=self._p.temperature,
+                stream=False,
+                **llm_kwargs,
+            )
+        except Exception as e:
+            # Fall back to non-structured mode if backend does not support response_format.
+            if self._p.response_format:
+                print(f"[code] structured output call failed ({e}); retrying without response_format ...")
+                raw = self._llm_client.chat_completion(
+                    prep_res["prompt"],
+                    temperature=self._p.temperature,
+                    stream=False,
+                )
+            else:
+                raise
         print(f"[code] LLM completed, raw length={len(raw)}")
         return {"raw": raw}
 
