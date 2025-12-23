@@ -79,6 +79,8 @@ class VerificationAgentNode(Node):
         simv_path = out_dir / self._p.sim_exe
         compile_log = out_dir / "sim_compile.log"
         run_log = out_dir / "sim_run.log"
+        compile_out_full = out_dir / "compile_out_full.log"
+        run_out_full = out_dir / "run_out_full.log"
         compile_error_log = out_dir / "compile_error.log"
         mismatch_case_log = out_dir / "mismatch_case.log"
 
@@ -90,6 +92,8 @@ class VerificationAgentNode(Node):
             "simv_path": str(simv_path),
             "compile_log": str(compile_log),
             "run_log": str(run_log),
+            "compile_out_full": str(compile_out_full),
+            "run_out_full": str(run_out_full),
             "compile_error_log": str(compile_error_log),
             "mismatch_case_log": str(mismatch_case_log),
         }
@@ -114,6 +118,7 @@ class VerificationAgentNode(Node):
         ]
         compile_out, compile_rc = self._run_cmd(compile_cmd, cwd=prep_res["workdir"])
         Path(prep_res["compile_log"]).write_text(compile_out, encoding="utf-8", errors="ignore")
+        Path(prep_res["compile_out_full"]).write_text(compile_out, encoding="utf-8", errors="ignore")
         print(f"[verify] compile done rc={compile_rc}")
 
         if compile_rc != 0:
@@ -131,6 +136,7 @@ class VerificationAgentNode(Node):
         run_cmd = [self._p.vvp_bin, prep_res["simv_path"]]
         run_out, run_rc = self._run_cmd(run_cmd, cwd=prep_res["workdir"])
         Path(prep_res["run_log"]).write_text(run_out, encoding="utf-8", errors="ignore")
+        Path(prep_res["run_out_full"]).write_text(run_out, encoding="utf-8", errors="ignore")
         print(f"[verify] run done rc={run_rc}")
 
         return {
@@ -193,6 +199,8 @@ class VerificationAgentNode(Node):
                 "simv": prep_res.get("simv_path"),
                 "compile_log": prep_res.get("compile_log"),
                 "run_log": prep_res.get("run_log"),
+                "compile_out_full": prep_res.get("compile_out_full"),
+                "run_out_full": prep_res.get("run_out_full"),
                 "compile_error_log": prep_res.get("compile_error_log"),
                 "mismatch_case_log": prep_res.get("mismatch_case_log"),
             },
