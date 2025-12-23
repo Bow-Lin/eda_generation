@@ -382,6 +382,24 @@ class VerificationAgentNode(Node):
                     "raw": f"mismatch_total={mm_cnt}",
                 }
             )
+
+            # Also capture individual sample mismatches if present.
+            sample_pat = re.compile(r"Sample\\s+(?P<idx>\\d+)\\s+mismatch\\s*:\\s*(?P<msg>.*)$", re.IGNORECASE)
+            for line in run_out.splitlines():
+                m = sample_pat.search(line)
+                if not m:
+                    continue
+                idx = m.group("idx")
+                msg = m.group("msg").strip()
+                failed.append(
+                    {
+                        "case": f"sample_{idx}",
+                        "message": msg,
+                        "signals": self._extract_signals(line),
+                        "expected_behavior": self._extract_expected_behavior(line),
+                        "raw": line.strip(),
+                    }
+                )
             return failed
 
         # CASE xxx FAIL:
