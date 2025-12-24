@@ -1,7 +1,7 @@
 from pathlib import Path
 import json
 
-from eda_generation.flow import build_flow, FlowParams
+from flow import build_flow, FlowParams
 from utils.clients.iflow_client import IFlowClient
 
 

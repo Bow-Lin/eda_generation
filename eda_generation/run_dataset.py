@@ -87,7 +87,10 @@ def run_case(
         ),
     )
 
-    shared = {"spec": spec}
+    shared = {
+        "spec": spec,
+        "project_root": str(project_root),
+    }
     flow.run(shared)
 
     # Save generated DUT (last attempt) to results_root

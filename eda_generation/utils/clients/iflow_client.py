@@ -83,7 +83,7 @@ class IFlowClient:
     def chat_completion(
         self,
         messages: Union[str, List[Dict[str, str]]],
-        model: str = "qwen3-max",  # Default to use qwen3-max model
+        model: str = "qwen3-coder-plus",  # Default to use qwen3-max model
         temperature: float = 0.7,
         max_tokens: Optional[int] = 16384,
         stream: bool = False,
@@ -145,7 +145,7 @@ class IFlowClient:
     async def achat_completion(
         self,
         messages: Union[str, List[Dict[str, str]]],
-        model: str = "qwen3-max",
+        model: str = "qwen3-coder-plus",
         temperature: float = 0.7,
         max_tokens: Optional[int] = 1000,
         stream: bool = False,
