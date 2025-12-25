@@ -4,7 +4,7 @@ import json
 import re
 from dataclasses import dataclass, field
 from pathlib import Path
-from typing import Any, Dict, List, Optional, Protocol, Tuple
+from typing import Any, Dict, List, Optional, Tuple
 
 from pocketflow import Node
 from utils.clients.iflow_client import IFlowClient
@@ -14,11 +14,10 @@ from utils.clients.iflow_client import IFlowClient
 class CodeAgentParams:
     project_root: str
     rtl_dir: str = "rtl"
-    allowed_exts: Tuple[str, ...] = (".v", ".sv")  # You said Verilog TB, but RTL may still include .sv in some repos.
+    allowed_exts: Tuple[str, ...] = (".v", ".sv")
     temperature: float = 0.2
     max_files: int = 32
-    context_radius_lines: int = 2
-    output_mode: str = "json_files"  # reserved for future: "unidiff"
+    output_mode: str = "json_files"
     forbid_tb_edit: bool = True
     strict_json_only: bool = True
     # When using Qwen structured output, set response_format to enforce JSON (see
@@ -29,21 +28,9 @@ class CodeAgentParams:
 
 class CodeAgentNode(Node):
     """
-    Code Agent:
-      - Generates RTL from spec when no RTL exists, or
-      - Patches RTL based on Review/Verification feedback.
-
-    Expected shared inputs (suggested keys):
-      - spec: str (user requirement / natural language)
-      - rtl_files: List[str] (relative paths)
-      - review_feedback: dict (from Review Agent)
-      - verify_feedback: dict (from Verification Agent)
-
-    Outputs to shared:
-      - code_agent_output_raw: str (LLM raw)
-      - code_agent_notes: str
-      - updated_rtl_files: List[str]
-      - last_edit_summary: str
+    Code Agent Node:
+    - Round 1: generate RTL from spec (GEN mode).
+    - Round 2+: patch existing RTL using feedback (PATCH mode), and include the current RTL in prompt.
     """
 
     def __init__(self, *, llm_client: Optional[IFlowClient] = None, params: CodeAgentParams):
@@ -58,6 +45,7 @@ class CodeAgentNode(Node):
         flow_status = shared.setdefault("flow_status", {})
         flow_status["round"] = int(flow_status.get("round", 0)) + 1
         flow_status["last_stage"] = "code"
+        round_no = int(flow_status["round"])
 
         spec = (shared.get("spec") or shared.get("user_query") or "").strip()
         if not spec:
@@ -67,17 +55,25 @@ class CodeAgentNode(Node):
         if rtl_files is None:
             rtl_files = self._auto_discover_rtl_files()
 
+        # Ensure last-round generated/edited RTL is included in context (critical for PATCH mode)
+        updated = shared.get("updated_rtl_files") or []
+        for p in reversed(updated):
+            if p and (p not in rtl_files):
+                rtl_files.insert(0, p)
+
         review_fb = shared.get("review_feedback")
         verify_fb = shared.get("verify_feedback")
 
         rtl_context = self._read_files_with_context(rtl_files, max_files=self._p.max_files)
         feedback_text = self._format_feedback(review_fb, verify_fb)
 
+        mode = "gen" if round_no == 1 else "patch"
         prompt = self._build_prompt(
             spec=spec,
             rtl_context=rtl_context,
             feedback_text=feedback_text,
             rtl_files=rtl_files,
+            mode=mode,
         )
 
         return {
@@ -85,6 +81,8 @@ class CodeAgentNode(Node):
             "rtl_files": rtl_files,
             "prompt": prompt,
             "has_feedback": bool(feedback_text.strip()),
+            "round": round_no,
+            "mode": mode,
         }
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
@@ -101,7 +99,6 @@ class CodeAgentNode(Node):
                 **llm_kwargs,
             )
         except Exception as e:
-            # Fall back to non-structured mode if backend does not support response_format.
             if self._p.response_format:
                 print(f"[code] structured output call failed ({e}); retrying without response_format ...")
                 raw = self._llm_client.chat_completion(
@@ -111,6 +108,7 @@ class CodeAgentNode(Node):
                 )
             else:
                 raise
+
         print(f"[code] LLM completed, raw length={len(raw)}")
         return {"raw": raw}
 
@@ -124,7 +122,7 @@ class CodeAgentNode(Node):
 
         updated_paths: List[str] = []
         for f in files:
-            rel = str(f.get("path") or "").strip()
+            rel = "TopModule.v"
             content = str(f.get("content") or "")
             if not rel:
                 continue
@@ -139,37 +137,32 @@ class CodeAgentNode(Node):
         shared["updated_rtl_files"] = updated_paths
 
         shared["last_edit_summary"] = self._make_edit_summary(
-            has_feedback=prep_res["has_feedback"],
+            has_feedback=prep_res.get("has_feedback", False),
             updated_paths=updated_paths,
             notes=notes,
         )
 
-        # Log concise summary with round/spec context.
         flow_status = shared.get("flow_status", {})
         round_no = flow_status.get("round")
-        spec = (shared.get("spec") or "").strip().replace("\n", " ")
-        spec_short = (spec[:80] + "...") if len(spec) > 80 else spec
-        print(
-            f"[code] round={round_no} spec=\"{spec_short}\" files={len(updated_paths)} "
-            f"has_feedback={prep_res['has_feedback']}"
-        )
+        spec = (shared.get("spec") or "").strip()
 
-        # Persist debug info to build/debug.log
+        # Persist debug info to build/debug.log (include llm_prompt)
         try:
             debug_dir = (self._root / "build").resolve()
             debug_dir.mkdir(parents=True, exist_ok=True)
             debug_path = debug_dir / "debug.log"
-            debug_path.parent.mkdir(parents=True, exist_ok=True)
             with debug_path.open("a", encoding="utf-8") as f:
                 f.write(
                     json.dumps(
                         {
                             "stage": "code",
                             "round": round_no,
+                            "mode": prep_res.get("mode"),
                             "spec": spec,
                             "updated_files": updated_paths,
                             "notes": notes,
                             "last_edit_summary": shared.get("last_edit_summary"),
+                            "llm_prompt": prep_res.get("prompt", ""),
                         },
                         ensure_ascii=False,
                         indent=2,
@@ -179,38 +172,82 @@ class CodeAgentNode(Node):
         except Exception:
             pass
 
+        spec_short = spec.replace("\n", " ")
+        spec_short = (spec_short[:80] + "...") if len(spec_short) > 80 else spec_short
+        print(
+            f"[code] round={round_no} mode={prep_res.get('mode')} spec=\"{spec_short}\" "
+            f"files={len(updated_paths)} has_feedback={prep_res.get('has_feedback')}"
+        )
+
         shared["code_status"] = {
             "stage": "code",
             "route": "next",
             "updated_rtl_files": updated_paths,
             "notes": notes,
         }
-
         return "next"
 
     # ------------------------- Prompting -------------------------
 
-    def _build_prompt(self, *, spec: str, rtl_context: str, feedback_text: str, rtl_files: List[str]) -> str:
+    def _build_prompt(
+        self,
+        *,
+        spec: str,
+        rtl_context: str,
+        feedback_text: str,
+        rtl_files: List[str],
+        mode: str,
+    ) -> str:
         rules = [
             "You are a senior RTL engineer.",
-            "Goal: produce correct synthesizable Verilog RTL that satisfies the spec and passes the provided checks.",
+            "Goal: produce synthesizable Verilog/SystemVerilog that passes the given testbench.",
             "Do NOT modify testbench files.",
-            "Keep module interfaces stable unless spec explicitly requires changes.",
-            "Return ONLY valid JSON (no markdown, no code fences).",
-            'JSON schema: {"files":[{"path":"relative/path.v","content":"full file content"}], "notes":"short explanation"}',
+            "Keep module interface stable.",
+            'Return ONLY valid JSON: {"files":[{"path":"...","content":"..."}],"notes":"..."} (no markdown).',
         ]
         if self._p.strict_json_only:
             rules.append("If you cannot comply with JSON-only output, still return JSON-only output.")
 
-        mode_hint = "PATCH existing RTL according to feedback." if feedback_text.strip() else "GENERATE RTL from spec."
         existing_hint = "\n".join([f"- {p}" for p in rtl_files]) if rtl_files else "(none)"
+        rtl_ctx = rtl_context.strip() or "(none)"
+        fb = feedback_text.strip() or "(none)"
 
-        prompt = f"""\
+        if mode == "patch":
+            return f"""\
 SYSTEM RULES:
 {chr(10).join(f"- {r}" for r in rules)}
 
 TASK MODE:
-- {mode_hint}
+- PATCH (do not rewrite from scratch). Make the smallest change that fixes the failures.
+
+SPEC (source of truth):
+{spec}
+
+CURRENT RTL (authoritative; patch this code):
+{rtl_ctx}
+
+VERIFICATION FEEDBACK (what failed):
+{fb}
+
+PATCH GUIDANCE:
+- Use the feedback to localize changes.
+- If Hint lines show only some outputs mismatch, DO NOT change outputs that already have "no mismatches".
+- Focus ONLY on the mismatched outputs/signals and keep other outputs identical.
+- Ensure each output has a single driver (avoid double assigns / multiple always blocks driving same net).
+- Pure combinational logic only (assign or always_comb), no latches.
+
+OUTPUT REQUIREMENTS:
+- Output ONLY JSON.
+- Include ONLY the RTL files that you changed.
+- Provide full file content for each changed file.
+"""
+        # GEN mode (Round 1)
+        return f"""\
+SYSTEM RULES:
+{chr(10).join(f"- {r}" for r in rules)}
+
+TASK MODE:
+- GENERATE (write the required RTL from scratch based on SPEC). Keep it minimal and synthesizable.
 
 SPEC:
 {spec}
@@ -219,38 +256,34 @@ EXISTING RTL FILES (relative paths):
 {existing_hint}
 
 EXISTING RTL CONTENT (read-only context):
-{rtl_context}
+{rtl_ctx}
 
-FEEDBACK (from review/verification; if empty, ignore):
-{feedback_text}
+FEEDBACK FROM PREVIOUS ROUND:
+{fb}
 
 OUTPUT REQUIREMENTS:
 - Output ONLY JSON.
 - Include ONLY the RTL files that need to be created/updated.
 - Each file's "content" must be a complete file (not a diff).
 """
-        return prompt
 
     # ------------------------- Feedback formatting -------------------------
 
     def _format_feedback(self, review_fb: Any, verify_fb: Any) -> str:
         parts: List[str] = []
-
         if isinstance(review_fb, dict):
             parts.append("REVIEW_FEEDBACK(spyglass):")
             parts.append(self._summarize_review_feedback(review_fb))
-
         if isinstance(verify_fb, dict):
             parts.append("VERIFY_FEEDBACK(iverilog):")
             parts.append(self._summarize_verify_feedback(verify_fb))
-
         return "\n".join([p for p in parts if p.strip()])
 
     def _summarize_review_feedback(self, fb: Dict[str, Any]) -> str:
         if fb.get("passed") is True:
-            return "- No syntax/lint errors.\n"
+            return "- No issues found.\n"
         issues = fb.get("issues") or []
-        lines = []
+        lines: List[str] = []
         for it in issues[:50]:
             sev = it.get("severity")
             f = it.get("file")
@@ -265,13 +298,32 @@ OUTPUT REQUIREMENTS:
     def _summarize_verify_feedback(self, fb: Dict[str, Any]) -> str:
         if fb.get("passed") is True:
             return "- All test cases passed.\n"
-        lines = []
+
+        lines: List[str] = []
         if fb.get("compile_passed") is False:
             for e in (fb.get("compile_errors") or [])[:50]:
                 lines.append(f"- COMPILE_ERROR: {e.get('file')}:{e.get('line')} {e.get('message')}")
+
         for case in (fb.get("failed_cases") or [])[:50]:
             cname = case.get("case") or "<unknown>"
             lines.append(f"- FAIL_CASE: {cname} {case.get('message')}")
+
+        tail = fb.get("raw_log_tail") or []
+        if isinstance(tail, list) and tail:
+            if fb.get("compile_passed") is False:
+                # compile failed: raw_log_tail is compile tail -> include last N lines
+                for s in tail[-20:]:
+                    ss = str(s).strip()
+                    if ss:
+                        lines.append(f"- {ss}")
+            else:
+                # compile passed: include only Hint/Mismatches lines
+                hint_lines = [
+                    s for s in tail if str(s).strip().startswith(("Hint:", "Mismatches:"))
+                ]
+                for s in hint_lines[-30:]:
+                    lines.append(f"- {str(s).strip()}")
+
         return "\n".join(lines) + ("\n" if lines else "")
 
     # ------------------------- File IO -------------------------
@@ -324,11 +376,9 @@ OUTPUT REQUIREMENTS:
 
     def _parse_llm_json(self, raw: str, *, strict: bool) -> Dict[str, Any]:
         text = raw.strip()
-
         if strict:
             return json.loads(text)
 
-        # lenient: try to extract first {...} block
         m = re.search(r"\{.*\}", text, flags=re.DOTALL)
         if not m:
             raise ValueError("LLM output is not JSON and no JSON object found.")
