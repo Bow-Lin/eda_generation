@@ -6,6 +6,7 @@ from typing import Any, Dict, Optional
 from pocketflow import Flow
 
 from nodes.code_agent import CodeAgentNode, CodeAgentParams
+from nodes.tb_agent import TbAgentNode, TbAgentParams
 from nodes.review_agent import ReviewAgentNode, ReviewAgentParams
 from nodes.verification_agent import VerificationAgentNode, VerificationAgentParams
 from nodes.finish_node import FinishNode
@@ -19,6 +20,7 @@ class FlowParams:
     top_rtl: str = "top"
     tb_flist: str = "tb.f"
     tb_top: str = "tb_top"
+    tb_dir: str = "tb"
     max_rounds: int = 3
 
 
@@ -36,6 +38,14 @@ def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
     code_agent = CodeAgentNode(
         llm_client=llm_client,
         params=CodeAgentParams(project_root=p.project_root),
+    )
+
+    tb_agent = TbAgentNode(
+        llm_client=llm_client,
+        params=TbAgentParams(
+            project_root=p.project_root,
+            tb_dir=p.tb_dir,
+        ),
     )
 
     review_agent = ReviewAgentNode(
@@ -62,7 +72,9 @@ def build_flow(*, llm_client: Any, params: Optional[FlowParams] = None) -> Flow:
     finish = FinishNode()
 
     # Edges
-    code_agent - "next" >> review_agent
+    code_agent - "next" >> tb_agent
+
+    tb_agent - "next" >> review_agent
 
     review_agent - "syntax_ok" >> verify_agent
     review_agent - "syntax_fail" >> code_agent
