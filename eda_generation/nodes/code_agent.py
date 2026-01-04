@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pocketflow import Node
 from utils.clients.iflow_client import IFlowClient
+from utils.prompt_loader import load_prompt_template
 
 
 @dataclass
@@ -198,74 +199,22 @@ class CodeAgentNode(Node):
         rtl_files: List[str],
         mode: str,
     ) -> str:
-        rules = [
-            "You are a senior RTL engineer.",
-            "Goal: produce synthesizable Verilog/SystemVerilog that passes the given testbench.",
-            "Do NOT modify testbench files.",
-            "Keep module interface stable.",
-            'Return ONLY valid JSON: {"files":[{"path":"...","content":"..."}],"notes":"..."} (no markdown).',
-        ]
+        strict_rule = ""
         if self._p.strict_json_only:
-            rules.append("If you cannot comply with JSON-only output, still return JSON-only output.")
-
+            strict_rule = "- If you cannot comply with JSON-only output, still return JSON-only output."
         existing_hint = "\n".join([f"- {p}" for p in rtl_files]) if rtl_files else "(none)"
         rtl_ctx = rtl_context.strip() or "(none)"
         fb = feedback_text.strip() or "(none)"
 
-        if mode == "patch":
-            return f"""\
-SYSTEM RULES:
-{chr(10).join(f"- {r}" for r in rules)}
-
-TASK MODE:
-- PATCH (do not rewrite from scratch). Make the smallest change that fixes the failures.
-
-SPEC (source of truth):
-{spec}
-
-CURRENT RTL (authoritative; patch this code):
-{rtl_ctx}
-
-VERIFICATION FEEDBACK (what failed):
-{fb}
-
-PATCH GUIDANCE:
-- Use the feedback to localize changes.
-- If Hint lines show only some outputs mismatch, DO NOT change outputs that already have "no mismatches".
-- Focus ONLY on the mismatched outputs/signals and keep other outputs identical.
-- Ensure each output has a single driver (avoid double assigns / multiple always blocks driving same net).
-- Pure combinational logic only (assign or always_comb), no latches.
-
-OUTPUT REQUIREMENTS:
-- Output ONLY JSON.
-- Include ONLY the RTL files that you changed.
-- Provide full file content for each changed file.
-"""
-        # GEN mode (Round 1)
-        return f"""\
-SYSTEM RULES:
-{chr(10).join(f"- {r}" for r in rules)}
-
-TASK MODE:
-- GENERATE (write the required RTL from scratch based on SPEC). Keep it minimal and synthesizable.
-
-SPEC:
-{spec}
-
-EXISTING RTL FILES (relative paths):
-{existing_hint}
-
-EXISTING RTL CONTENT (read-only context):
-{rtl_ctx}
-
-FEEDBACK FROM PREVIOUS ROUND:
-{fb}
-
-OUTPUT REQUIREMENTS:
-- Output ONLY JSON.
-- Include ONLY the RTL files that need to be created/updated.
-- Each file's "content" must be a complete file (not a diff).
-"""
+        template_name = "code_agent_patch.txt" if mode == "patch" else "code_agent_gen.txt"
+        template = load_prompt_template(template_name)
+        return template.format(
+            strict_rule=strict_rule,
+            spec=spec,
+            rtl_ctx=rtl_ctx,
+            fb=fb,
+            existing_hint=existing_hint,
+        )
 
     # ------------------------- Feedback formatting -------------------------
 

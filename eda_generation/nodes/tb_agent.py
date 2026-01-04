@@ -8,6 +8,7 @@ from typing import Any, Dict, List, Optional, Tuple
 
 from pocketflow import Node
 from utils.clients.iflow_client import IFlowClient
+from utils.prompt_loader import load_prompt_template
 
 
 @dataclass
@@ -208,42 +209,21 @@ class TbAgentNode(Node):
         top_rtl: str,
         tb_top: str,
     ) -> str:
-        rules = [
-            "You are a senior verification engineer.",
-            "Goal: produce a self-checking SystemVerilog testbench from the SPEC.",
-            "Do NOT modify RTL files.",
-            "Keep the DUT module interface stable.",
-            f"Testbench top module must be named: {tb_top}.",
-            f"Instantiate DUT module named: {top_rtl}.",
-            "Use only standard SystemVerilog supported by iverilog -g2012.",
-            "Avoid DPI, PLI, file I/O, or external dependencies.",
-            "Emit a summary line: 'Mismatches: X in Y samples'.",
-            'Return ONLY valid JSON: {"files":[{"path":"...","content":"..."}],"notes":"..."} (no markdown).',
-        ]
+        strict_rule = ""
         if self._p.strict_json_only:
-            rules.append("If you cannot comply with JSON-only output, still return JSON-only output.")
-
+            strict_rule = "- If you cannot comply with JSON-only output, still return JSON-only output."
         rtl_ctx = rtl_context.strip() or "(none)"
         tb_ctx = tb_context.strip() or "(none)"
 
-        return f"""\
-SYSTEM RULES:
-{chr(10).join(f"- {r}" for r in rules)}
-
-SPEC (source of truth):
-{spec}
-
-CURRENT RTL CONTEXT (read-only):
-{rtl_ctx}
-
-EXISTING TB CONTEXT (read-only):
-{tb_ctx}
-
-OUTPUT REQUIREMENTS:
-- Output ONLY JSON.
-- Include ONLY the TB files that need to be created/updated.
-- Each file's "content" must be a complete file (not a diff).
-"""
+        template = load_prompt_template("tb_agent.txt")
+        return template.format(
+            strict_rule=strict_rule,
+            spec=spec,
+            rtl_ctx=rtl_ctx,
+            tb_ctx=tb_ctx,
+            tb_top=tb_top,
+            top_rtl=top_rtl,
+        )
 
     # ------------------------- File IO -------------------------
 
