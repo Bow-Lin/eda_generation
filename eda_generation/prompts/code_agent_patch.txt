@@ -37,6 +37,7 @@ VERIFICATION FEEDBACK (what failed):
 OUTPUT FORMAT:
 - Output ONLY JSON, no extra text.
 - The JSON object must contain "files" and "notes" only.
+- "notes" must be a single string, not a list.
 - Return exactly ONE file entry with path "TopModule.v".
 - Provide full file content for the changed file.
 - Do not include markdown fences or comments outside the SV file.

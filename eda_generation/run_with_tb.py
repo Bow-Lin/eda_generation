@@ -1,8 +1,10 @@
 from __future__ import annotations
 
 import argparse
+import json
 import os
 import shutil
+import traceback
 from datetime import datetime
 from pathlib import Path
 from typing import List, Optional, Tuple
@@ -74,6 +76,29 @@ def _rel_to_project(project_root: Path, target: Path) -> str:
     return Path(os.path.relpath(target, start=project_root)).as_posix()
 
 
+def _log_exception(logs_root: Path, err: Exception, shared: dict) -> None:
+    logs_root.mkdir(parents=True, exist_ok=True)
+    exc_path = logs_root / "exception.log"
+    exc_text = traceback.format_exc()
+    exc_path.write_text(exc_text, encoding="utf-8")
+
+    raw = shared.get("code_agent_output_raw", "")
+    if raw:
+        (logs_root / "code_agent.raw.json").write_text(raw, encoding="utf-8")
+
+    notes = shared.get("code_agent_notes", "")
+    if notes:
+        (logs_root / "code_agent.notes.txt").write_text(notes, encoding="utf-8")
+
+    tb_raw = shared.get("tb_agent_output_raw", "")
+    if tb_raw:
+        (logs_root / "tb_agent.raw.json").write_text(tb_raw, encoding="utf-8")
+
+    tb_notes = shared.get("tb_agent_notes", "")
+    if tb_notes:
+        (logs_root / "tb_agent.notes.txt").write_text(tb_notes, encoding="utf-8")
+
+
 def _build_gen_flow(
     *,
     llm_client: IFlowClient,
@@ -134,7 +159,7 @@ def run_case(
     tb_top: str,
     max_attempts: int,
     run_id: str,
-) -> None:
+) -> dict:
     prompt_path, ref_src, tb_src = _resolve_case_files(dataset_root, case)
     spec = prompt_path.read_text(encoding="utf-8")
 
@@ -196,10 +221,17 @@ def run_case(
         "top_rtl": "TopModule",
         "tb_top": tb_top,
         "case": case,
+        "tb_regen_on_fail": True,
     }
 
-    gen_flow.run(shared)
+    try:
+        gen_flow.run(shared)
+    except Exception as e:
+        _log_exception(logs_root, e, shared)
+        print(f"[gen-tb] case={case} exception logged to {logs_root / 'exception.log'}")
+        raise
     gen_passed = bool(shared.get("verify_feedback", {}).get("passed"))
+    gen_attempts = int(shared.get("flow_status", {}).get("round", 0))
     if gen_passed:
         print(f"[gen-tb] case={case} passed on generated TB")
     else:
@@ -233,6 +265,13 @@ def run_case(
     tb_notes = shared.get("tb_agent_notes", "")
     if tb_notes:
         (logs_root / f"{case}.tb.notes.txt").write_text(tb_notes, encoding="utf-8")
+
+    return {
+        "case": case,
+        "gen_passed": gen_passed,
+        "gen_attempts": gen_attempts,
+        "dataset_passed": dataset_passed,
+    }
 
 
 def main() -> None:
@@ -295,10 +334,16 @@ def main() -> None:
     if not cases:
         raise SystemExit("No cases found in problems.txt")
 
+    attempt_buckets = {i: 0 for i in range(1, args.max_attempts + 1)}
+    gen_fail_count = 0
+    dataset_pass_count = 0
+    dataset_fail_count = 0
+    failed_cases: List[str] = []
+
     for idx, case in enumerate(cases, 1):
         print(f"===== [{idx}/{len(cases)}] case={case} =====")
         try:
-            run_case(
+            result = run_case(
                 case=case,
                 dataset_root=dataset_root,
                 project_root=project_root,
@@ -308,9 +353,51 @@ def main() -> None:
                 max_attempts=args.max_attempts,
                 run_id=run_id,
             )
+            gen_attempts = result.get("gen_attempts", 0)
+            if result.get("gen_passed"):
+                if gen_attempts in attempt_buckets:
+                    attempt_buckets[gen_attempts] += 1
+                else:
+                    attempt_buckets[args.max_attempts] += 1
+            else:
+                gen_fail_count += 1
+
+            if result.get("dataset_passed"):
+                dataset_pass_count += 1
+            else:
+                dataset_fail_count += 1
+                failed_cases.append(case)
         except Exception as e:
             print(f"[error] case={case}: {e}")
+            dataset_fail_count += 1
+            failed_cases.append(case)
             continue
+
+    total_cases = len(cases)
+    print("===== RUN SUMMARY =====")
+    print(f"[summary] total_cases={total_cases}")
+    for i in range(1, args.max_attempts + 1):
+        print(f"[summary] gen_pass_attempt_{i}={attempt_buckets[i]}")
+    print(f"[summary] gen_fail={gen_fail_count}")
+    print(f"[summary] dataset_passed={dataset_pass_count}")
+    print(f"[summary] dataset_failed={dataset_fail_count}")
+    if failed_cases:
+        print(f"[summary] failed_cases={', '.join(failed_cases)}")
+
+    summary = {
+        "total_cases": total_cases,
+        "gen_pass_attempts": attempt_buckets,
+        "gen_fail": gen_fail_count,
+        "dataset_passed": dataset_pass_count,
+        "dataset_failed": dataset_fail_count,
+        "failed_cases": failed_cases,
+    }
+    summary_root = logs_root_base / run_id if run_id else logs_root_base
+    summary_root.mkdir(parents=True, exist_ok=True)
+    (summary_root / "summary.json").write_text(
+        json.dumps(summary, ensure_ascii=False, indent=2),
+        encoding="utf-8",
+    )
 
 
 if __name__ == "__main__":

@@ -70,7 +70,11 @@ class TbAgentNode(Node):
             else ""
         )
 
+        verify_fb = shared.get("verify_feedback")
+        force_regen = bool(shared.get("tb_regen_on_fail")) and isinstance(verify_fb, dict) and verify_fb.get("passed") is False
         should_skip = bool(tb_files) and (round_no > 1 or shared.get("tb_generated"))
+        if force_regen:
+            should_skip = False
 
         top_rtl = shared.get("top_rtl") or "TopModule"
         tb_top = shared.get("tb_top") or "tb"
@@ -99,27 +103,7 @@ class TbAgentNode(Node):
             return {"skipped": True, "raw": ""}
 
         print(f"[tb] invoking LLM (temp={self._p.temperature}) ...")
-        llm_kwargs: Dict[str, Any] = {}
-        if self._p.response_format:
-            llm_kwargs["response_format"] = self._p.response_format
-
-        try:
-            raw = self._llm_client.chat_completion(
-                prep_res["prompt"],
-                temperature=self._p.temperature,
-                stream=False,
-                **llm_kwargs,
-            )
-        except Exception as e:
-            if self._p.response_format:
-                print(f"[tb] structured output call failed ({e}); retrying without response_format ...")
-                raw = self._llm_client.chat_completion(
-                    prep_res["prompt"],
-                    temperature=self._p.temperature,
-                    stream=False,
-                )
-            else:
-                raise
+        raw = self._call_llm(prep_res["prompt"])
 
         print(f"[tb] LLM completed, raw length={len(raw)}")
         return {"skipped": False, "raw": raw}
@@ -138,7 +122,26 @@ class TbAgentNode(Node):
         raw = exec_res["raw"]
         shared["tb_agent_output_raw"] = raw
 
-        parsed = self._parse_llm_json(raw, strict=self._p.strict_json_only)
+        parsed = None
+        attempt = 0
+        while True:
+            try:
+                parsed = self._parse_llm_json(raw, strict=self._p.strict_json_only)
+                notes_val = parsed.get("notes")
+                if notes_val is not None and not isinstance(notes_val, str):
+                    raise ValueError("LLM JSON 'notes' must be a string.")
+                files_val = parsed.get("files", [])
+                if not isinstance(files_val, list):
+                    raise ValueError("LLM JSON 'files' must be a list.")
+                break
+            except Exception as e:
+                attempt += 1
+                if attempt > 1:
+                    raise
+                print(f"[tb] parse failed ({e}); retrying LLM once ...")
+                raw = self._call_llm(prep_res["prompt"])
+                shared["tb_agent_output_raw"] = raw
+
         files = parsed.get("files", [])
         notes = (parsed.get("notes") or "").strip()
 
@@ -197,6 +200,28 @@ class TbAgentNode(Node):
             "notes": notes,
         }
         return "next"
+
+    def _call_llm(self, prompt: str) -> str:
+        llm_kwargs: Dict[str, Any] = {}
+        if self._p.response_format:
+            llm_kwargs["response_format"] = self._p.response_format
+
+        try:
+            return self._llm_client.chat_completion(
+                prompt,
+                temperature=self._p.temperature,
+                stream=False,
+                **llm_kwargs,
+            )
+        except Exception as e:
+            if self._p.response_format:
+                print(f"[tb] structured output call failed ({e}); retrying without response_format ...")
+                return self._llm_client.chat_completion(
+                    prompt,
+                    temperature=self._p.temperature,
+                    stream=False,
+                )
+            raise
 
     # ------------------------- Prompting -------------------------
 

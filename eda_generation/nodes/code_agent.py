@@ -88,27 +88,7 @@ class CodeAgentNode(Node):
 
     def exec(self, prep_res: Dict[str, Any]) -> Dict[str, Any]:
         print(f"[code] invoking LLM (temp={self._p.temperature}) ...")
-        llm_kwargs: Dict[str, Any] = {}
-        if self._p.response_format:
-            llm_kwargs["response_format"] = self._p.response_format
-
-        try:
-            raw = self._llm_client.chat_completion(
-                prep_res["prompt"],
-                temperature=self._p.temperature,
-                stream=False,
-                **llm_kwargs,
-            )
-        except Exception as e:
-            if self._p.response_format:
-                print(f"[code] structured output call failed ({e}); retrying without response_format ...")
-                raw = self._llm_client.chat_completion(
-                    prep_res["prompt"],
-                    temperature=self._p.temperature,
-                    stream=False,
-                )
-            else:
-                raise
+        raw = self._call_llm(prep_res["prompt"])
 
         print(f"[code] LLM completed, raw length={len(raw)}")
         return {"raw": raw}
@@ -117,7 +97,26 @@ class CodeAgentNode(Node):
         raw = exec_res["raw"]
         shared["code_agent_output_raw"] = raw
 
-        parsed = self._parse_llm_json(raw, strict=self._p.strict_json_only)
+        parsed = None
+        attempt = 0
+        while True:
+            try:
+                parsed = self._parse_llm_json(raw, strict=self._p.strict_json_only)
+                notes_val = parsed.get("notes")
+                if notes_val is not None and not isinstance(notes_val, str):
+                    raise ValueError("LLM JSON 'notes' must be a string.")
+                files_val = parsed.get("files", [])
+                if not isinstance(files_val, list):
+                    raise ValueError("LLM JSON 'files' must be a list.")
+                break
+            except Exception as e:
+                attempt += 1
+                if attempt > 1:
+                    raise
+                print(f"[code] parse failed ({e}); retrying LLM once ...")
+                raw = self._call_llm(prep_res["prompt"])
+                shared["code_agent_output_raw"] = raw
+
         files = parsed.get("files", [])
         notes = (parsed.get("notes") or "").strip()
 
@@ -187,6 +186,28 @@ class CodeAgentNode(Node):
             "notes": notes,
         }
         return "next"
+
+    def _call_llm(self, prompt: str) -> str:
+        llm_kwargs: Dict[str, Any] = {}
+        if self._p.response_format:
+            llm_kwargs["response_format"] = self._p.response_format
+
+        try:
+            return self._llm_client.chat_completion(
+                prompt,
+                temperature=self._p.temperature,
+                stream=False,
+                **llm_kwargs,
+            )
+        except Exception as e:
+            if self._p.response_format:
+                print(f"[code] structured output call failed ({e}); retrying without response_format ...")
+                return self._llm_client.chat_completion(
+                    prompt,
+                    temperature=self._p.temperature,
+                    stream=False,
+                )
+            raise
 
     # ------------------------- Prompting -------------------------
 
@@ -267,9 +288,19 @@ class CodeAgentNode(Node):
                         lines.append(f"- {ss}")
             else:
                 # compile passed: include only Hint/Mismatches lines
-                hint_lines = [
-                    s for s in tail if str(s).strip().startswith(("Hint:", "Mismatches:"))
-                ]
+                hint_lines = []
+                for s in tail:
+                    line = str(s).strip()
+                    if not line:
+                        continue
+                    if line.startswith(("Hint:", "Mismatches:")):
+                        hint_lines.append(line)
+                        continue
+                    if line.startswith("SIMULATION"):
+                        hint_lines.append(line)
+                        continue
+                    if re.search(r"\b(expected|got|mismatch|fail|error)\b", line, re.IGNORECASE):
+                        hint_lines.append(line)
                 for s in hint_lines[-30:]:
                     lines.append(f"- {str(s).strip()}")
 

@@ -261,3 +261,12 @@ fail output
 [verify] round=3 spec="I would like you to implement a module named TopModule with the following interf..." passed=False compile_passed=True compile_errors=0 failed_cases=1
 [summary] review_issues=0 failed_cases=1 compile_errors=0
 ```
+
+
+# flow with tb
+RUN_ID=$(date +%Y%m%d%H%M%S)
+python eda_generation/run_with_tb.py \
+   --dataset-root ./dataset/dataset_spec-to-rtl \
+   --exp-root ./exp_${RUN_ID} \
+   --tb-top tb \
+   --max-attempts 5

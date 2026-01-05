@@ -11,6 +11,7 @@ SYSTEM RULES:
 - Drive all DUT inputs with deterministic stimulus; if using randomness, set a fixed seed.
 - Build a reference model to compute expected outputs; compare every sample and count mismatches.
 - Report the FIRST mismatch with time, inputs, expected outputs, and got outputs.
+- For each mismatch (or for the first N mismatches), emit a line starting with "Hint:" that includes inputs, expected outputs, and got outputs.
 - Emit a summary line: 'Mismatches: X in Y samples'.
 - When simulation ends, print "SIMULATION PASSED" if no mismatch occurs, else print:
   "SIMULATION FAILED - X MISMATCHES DETECTED, FIRST AT TIME Y".
@@ -36,6 +37,7 @@ EXISTING TB CONTEXT (read-only):
 OUTPUT FORMAT:
 - Output ONLY JSON, no extra text.
 - The JSON object must contain "files" and "notes" only.
+- "notes" must be a single string, not a list.
 - Return exactly ONE file entry with path "tb/{tb_top}.sv".
 - Each file's "content" must be a complete file (not a diff).
 - Do not include markdown fences or comments outside the SV file.

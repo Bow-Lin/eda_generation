@@ -38,6 +38,7 @@ FEEDBACK FROM PREVIOUS ROUND:
 OUTPUT FORMAT:
 - Output ONLY JSON, no extra text.
 - The JSON object must contain "files" and "notes" only.
+- "notes" must be a single string, not a list.
 - Return exactly ONE file entry with path "TopModule.v".
 - Each file's "content" must be a complete file (not a diff).
 - Do not include markdown fences or comments outside the SV file.
